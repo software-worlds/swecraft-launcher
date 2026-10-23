@@ -1,0 +1,39 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "swecraft-coordinator"
+version = "0.1.0"
+description = "Autonomous per-repository maintainer loop over the one-shot runner"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "typer>=0.16,<1",
+    "pyyaml>=6,<7",
+    "pydantic>=2.7,<3",
+    "jinja2>=3.1,<4",
+    "swecraft-runner",
+    "swecraft-common",
+    "swecraft-forge",
+]
+
+[project.scripts]
+swecraft-coordinator = "swecraft_coordinator.cli:app"
+
+[dependency-groups]
+dev = ["ruff>=0.12,<1"]
+
+[tool.uv.sources]
+swecraft-runner = { workspace = true }
+swecraft-common = { workspace = true }
+swecraft-forge = { workspace = true }
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/swecraft_coordinator"]
+
+[tool.ruff]
+line-length = 88
+
+[tool.ruff.lint]
+select = ["B", "E", "F", "I", "UP"]

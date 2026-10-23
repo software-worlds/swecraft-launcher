@@ -1,0 +1,6 @@
+# Society checkpointing bound to this experiment's apparatus and forge project.
+schema_version: 1
+apparatus:
+  root: experiments/demo
+checkpoint:
+  compose_project: demo-forge

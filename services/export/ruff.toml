@@ -1,0 +1,9 @@
+# The exporter is vendored from software-worlds/sim-browser
+# (services/sim-browser/scripts/export) and kept as close to it as the paths
+# allow, so fixes can flow both ways. sim-browser does not run ruff format on
+# it, so only the correctness rules apply here.
+line-length = 160
+
+[lint]
+select = ["E", "F"]
+ignore = ["E501", "E731"]

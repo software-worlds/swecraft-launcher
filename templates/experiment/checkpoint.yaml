@@ -1,0 +1,7 @@
+# FILL: bind Society checkpointing to this experiment's reviewed apparatus and
+# live Forge project. Runtime state remains under the repository-root .swecraft/.
+schema_version: 1
+apparatus:
+  root: experiments/FILL-experiment-name
+checkpoint:
+  compose_project: FILL-compose-project

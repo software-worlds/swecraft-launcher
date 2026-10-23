@@ -1,0 +1,1 @@
+{"schema":"sim-browser/index-v1","groups":[{"id":"world-t","label":"World-T · three repositories","reference":null,"world":"World-T · three repositories"}],"runs":[{"id":"tiny","label":"Tiny · World-T","group":"world-t","model":"anthropic/claude-test","harness":"claude-code","agents":"3","setting":null,"sessions":3,"hours":1.43,"tokensB":0.0,"sCarry":null,"bundle":"tiny"}]}

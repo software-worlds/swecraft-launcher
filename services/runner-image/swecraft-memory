@@ -1,0 +1,270 @@
+#!/usr/bin/env node
+// Structured access to the durable memory workspace mounted at /app/memory.
+// Keeps agents appending in a consistent format instead of freeform-editing
+// the memory files.
+"use strict";
+
+const fs = require("fs");
+const path = require("path");
+
+const MEMORY_DIR = process.env.SWECRAFT_MEMORY_DIR || "/app/memory";
+
+function fail(message) {
+  process.stderr.write(`swecraft-memory: ${message}\n`);
+  process.exit(2);
+}
+
+function requireMemoryDir() {
+  if (!fs.existsSync(MEMORY_DIR) || !fs.statSync(MEMORY_DIR).isDirectory()) {
+    fail(`memory workspace not found at ${MEMORY_DIR}`);
+  }
+}
+
+const SEARCH_EXTENSIONS = [".md", ".json", ".jsonl"];
+const MAX_SEARCH_BYTES = 1024 * 1024;
+
+function searchableFiles(root) {
+  const found = [];
+  const queue = [root];
+  while (queue.length > 0) {
+    const current = queue.pop();
+    for (const entry of fs.readdirSync(current, { withFileTypes: true })) {
+      if (entry.name === ".git" || entry.isSymbolicLink()) continue;
+      const full = path.join(current, entry.name);
+      if (entry.isDirectory()) queue.push(full);
+      else if (
+        entry.isFile() &&
+        SEARCH_EXTENSIONS.some((extension) => entry.name.endsWith(extension)) &&
+        fs.statSync(full).size <= MAX_SEARCH_BYTES
+      )
+        found.push(full);
+    }
+  }
+  return found.sort();
+}
+
+function show(names) {
+  requireMemoryDir();
+  const targets = names.length > 0 ? names : ["PROJECT.md", "MEMORY.md"];
+  for (const name of targets) {
+    const file = path.join(MEMORY_DIR, name.endsWith(".md") ? name : `${name}.md`);
+    process.stdout.write(`===== ${path.relative(MEMORY_DIR, file)} =====\n`);
+    if (fs.existsSync(file)) process.stdout.write(fs.readFileSync(file, "utf8"));
+    else process.stdout.write("(absent)\n");
+    process.stdout.write("\n");
+  }
+}
+
+function search(terms) {
+  if (terms.length === 0) fail("usage: swecraft-memory search <query>");
+  requireMemoryDir();
+  const query = terms.join(" ").toLowerCase();
+  let hits = 0;
+  for (const file of searchableFiles(MEMORY_DIR)) {
+    const lines = fs.readFileSync(file, "utf8").split("\n");
+    lines.forEach((line, index) => {
+      if (line.toLowerCase().includes(query)) {
+        const relative = path.relative(MEMORY_DIR, file);
+        process.stdout.write(`${relative}:${index + 1}: ${line.trim()}\n`);
+        hits += 1;
+      }
+    });
+  }
+  if (hits === 0) process.stdout.write("no matches\n");
+}
+
+function add(args) {
+  let section = "Durable";
+  const rest = [];
+  for (let index = 0; index < args.length; index += 1) {
+    if (args[index] === "--section") {
+      section = args[index + 1] || fail("--section requires a name");
+      index += 1;
+    } else rest.push(args[index]);
+  }
+  const text = rest.join(" ").trim();
+  if (!text) fail("usage: swecraft-memory add [--section <name>] <text>");
+  requireMemoryDir();
+  const file = path.join(MEMORY_DIR, "MEMORY.md");
+  let content = fs.existsSync(file) ? fs.readFileSync(file, "utf8") : "# Memory\n";
+  if (!content.endsWith("\n")) content += "\n";
+  const heading = `## ${section}`;
+  const lines = content.split("\n");
+  const start = lines.findIndex((line) => line.trim() === heading);
+  if (start === -1) {
+    content += `\n${heading}\n\n- ${text}\n`;
+  } else {
+    let end = lines.length;
+    for (let index = start + 1; index < lines.length; index += 1) {
+      if (lines[index].startsWith("## ")) {
+        end = index;
+        break;
+      }
+    }
+    while (end > start + 1 && lines[end - 1].trim() === "") end -= 1;
+    lines.splice(end, 0, `- ${text}`);
+    content = lines.join("\n");
+    if (!content.endsWith("\n")) content += "\n";
+  }
+  fs.writeFileSync(file, content);
+  process.stdout.write(`added under "${section}" in MEMORY.md\n`);
+}
+
+function parseEditArgs(args, flags) {
+  const options = {};
+  const rest = [];
+  for (let index = 0; index < args.length; index += 1) {
+    if (flags.includes(args[index])) {
+      const name = args[index].slice(2);
+      options[name] = args[index + 1] || fail(`${args[index]} requires a value`);
+      index += 1;
+    } else rest.push(args[index]);
+  }
+  return { options, rest };
+}
+
+function sectionRange(lines, section) {
+  if (!section) return { start: 0, end: lines.length };
+  const heading = `## ${section}`;
+  const start = lines.findIndex((line) => line.trim() === heading);
+  if (start === -1) fail(`no section "${section}" in MEMORY.md`);
+  let end = lines.length;
+  for (let index = start + 1; index < lines.length; index += 1) {
+    if (lines[index].startsWith("## ")) {
+      end = index;
+      break;
+    }
+  }
+  return { start: start + 1, end };
+}
+
+// Resolve --match to exactly one bullet: zero matches and
+// multiple *distinct* matching bullets are caller-fixable errors; repeated
+// identical bullets resolve to the first occurrence.
+function matchBullet(lines, range, match) {
+  const query = match.toLowerCase();
+  const hits = [];
+  for (let index = range.start; index < range.end; index += 1) {
+    const line = lines[index];
+    if (/^\s*- /.test(line) && line.toLowerCase().includes(query)) {
+      hits.push(index);
+    }
+  }
+  if (hits.length === 0) fail(`no bullet matched: ${match} in MEMORY.md`);
+  const distinct = new Set(hits.map((index) => lines[index].trim()));
+  if (distinct.size > 1) {
+    const candidates = hits
+      .map((index) => `  ${lines[index].trim()}`)
+      .join("\n");
+    fail(`multiple bullets matched: ${match} in MEMORY.md\n${candidates}`);
+  }
+  return hits[0];
+}
+
+function loadMemoryLines() {
+  requireMemoryDir();
+  const file = path.join(MEMORY_DIR, "MEMORY.md");
+  if (!fs.existsSync(file)) fail("MEMORY.md not found");
+  return { file, lines: fs.readFileSync(file, "utf8").split("\n") };
+}
+
+function saveMemoryLines(file, lines) {
+  let content = lines.join("\n");
+  if (!content.endsWith("\n")) content += "\n";
+  fs.writeFileSync(file, content);
+}
+
+function replace(args) {
+  const { options } = parseEditArgs(args, ["--section", "--match", "--with"]);
+  if (!options.match || !options.with) {
+    fail("usage: swecraft-memory replace [--section <name>] --match <text> --with <text>");
+  }
+  const { file, lines } = loadMemoryLines();
+  const range = sectionRange(lines, options.section);
+  const index = matchBullet(lines, range, options.match);
+  const indent = lines[index].match(/^\s*/)[0];
+  const updated = `${indent}- ${options.with.trim()}`;
+  if (lines[index].trim() === updated.trim()) {
+    process.stdout.write("no change (duplicate) in MEMORY.md\n");
+    return;
+  }
+  const target = updated.trim().toLowerCase();
+  const existsElsewhere = lines.some(
+    (line, at) => at !== index && line.trim().toLowerCase() === target
+  );
+  if (existsElsewhere) {
+    lines.splice(index, 1);
+    saveMemoryLines(file, lines);
+    process.stdout.write("collapsed duplicate bullet in MEMORY.md\n");
+    return;
+  }
+  lines[index] = updated;
+  saveMemoryLines(file, lines);
+  process.stdout.write("replaced bullet in MEMORY.md\n");
+}
+
+function remove(args) {
+  const { options } = parseEditArgs(args, ["--section", "--match"]);
+  if (!options.match) {
+    fail("usage: swecraft-memory remove [--section <name>] --match <text>");
+  }
+  const { file, lines } = loadMemoryLines();
+  const range = sectionRange(lines, options.section);
+  const index = matchBullet(lines, range, options.match);
+  lines.splice(index, 1);
+  saveMemoryLines(file, lines);
+  process.stdout.write("removed bullet from MEMORY.md\n");
+}
+
+function daily(args) {
+  const text = args.join(" ").trim();
+  if (!text) fail("usage: swecraft-memory daily <text>");
+  requireMemoryDir();
+  const today = new Date().toISOString().slice(0, 10);
+  const dir = path.join(MEMORY_DIR, "daily");
+  fs.mkdirSync(dir, { recursive: true });
+  const file = path.join(dir, `${today}.md`);
+  let content = fs.existsSync(file)
+    ? fs.readFileSync(file, "utf8")
+    : `# Daily log for ${today}\n\n## Activity\n\n`;
+  if (content.length > 0 && !content.endsWith("\n")) content += "\n";
+  fs.writeFileSync(file, `${content}- ${text}\n`);
+  process.stdout.write(`added to daily/${today}.md\n`);
+}
+
+const [, , command, ...args] = process.argv;
+switch (command) {
+  case "show":
+    show(args);
+    break;
+  case "search":
+    search(args);
+    break;
+  case "add":
+    add(args);
+    break;
+  case "replace":
+    replace(args);
+    break;
+  case "remove":
+    remove(args);
+    break;
+  case "daily":
+    daily(args);
+    break;
+  default:
+    process.stdout.write(
+      [
+        "usage: swecraft-memory <command>",
+        "  show [file ...]                  print PROJECT.md and MEMORY.md",
+        "  search <query>                   search memory (.md/.json/.jsonl)",
+        "  add [--section <name>] <text>    append a bullet to MEMORY.md",
+        "  replace [--section <name>] --match <text> --with <text>",
+        "                                   rewrite one existing bullet",
+        "  remove [--section <name>] --match <text>",
+        "                                   delete one existing bullet",
+        "  daily <text>                     append a bullet to today's daily note",
+      ].join("\n") + "\n"
+    );
+    process.exit(command === undefined || command === "help" ? 0 : 2);
+}

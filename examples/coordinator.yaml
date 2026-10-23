@@ -1,0 +1,128 @@
+# Coordinator configuration. Copy to coordinator.yaml (gitignored) and adjust.
+#
+# Secret-bearing values (admin_token, agent_env entries) support indirection
+# so this file stays committable:
+#   file:<path>  read the value from a file
+#   env:<NAME>   read the value from the environment
+# anything else is used literally.
+
+forge_url: http://127.0.0.1:3400
+model: anthropic/claude-sonnet-4-6
+image: swecraft-runner-image:0.1
+# Harbor's stock agent. `codex`, `kimi-cli` and `antigravity-cli` are
+# alternatives; changing the agent usually means changing model, agent
+# kwargs, and agent_env together.
+agent: claude-code
+# Settings under prompt: change what the agent is told, nothing else.
+# collaboration: shared lets the wake prompt mention sibling repositories;
+# isolated drops those sentences (pair with visibility: private in world.yaml,
+# which is what actually keeps siblings out of reach).
+prompt:
+  collaboration: shared
+  # stated tells each agent its run budget in wakes and what it has used;
+  # silent enforces the same cap without saying so.
+  budget: stated
+
+# Nudges: interventions with a trigger and a channel, present on some wakes
+# and absent on the others (docs/reference/nudges.md). Every trigger is off
+# by default.
+# nudges:
+#   collaboration:            # the collaboration check, on either condition
+#     below_rate:             # the forge's record of recent wakes
+#       target: 0.3           # fewer reached-out wakes than this share of the window; 0 = off
+#       window: 10            # completed wakes the rate is taken over, at least 3
+#     every_wakes: 3          # every Nth wake, whatever the record; 0 = off
+#   finalize:
+#     at: 0.97                # the end-of-wake notice of a long wake (was wake_budget.finalize_at)
+
+# A run budget per agent: wakes it may start over the whole run (failed and
+# idle wakes count); the scheduler stops waking it there. 0 = uncapped.
+budget:
+  wakes: 0
+  # A file on the board through which wakes move between agents (a transfer
+  # is a pull request that lowers one line and raises another); seed it with
+  # `swecraft-coordinator budget --seed`. Every agent must maintain that repository.
+  # ledger: swecraft/society/budget.yaml
+
+# Forge admin credential; only needed for `swecraft-coordinator onboard`.
+admin_token: file:services/forge/state/admin_token
+
+# Variables forwarded into the agent sandbox, each with its source.
+# SWECRAFT_FORGE_TOKEN and SWECRAFT_FORGE_URL are added automatically per wake.
+agent_env:
+  CLAUDE_CODE_OAUTH_TOKEN: env:CLAUDE_CODE_OAUTH_TOKEN
+  CLAUDE_FORCE_OAUTH: "1"
+
+# Cloudflare Kimi CLI alternative (replace model, agent, and agent_env above):
+# model: openai/@cf/moonshotai/kimi-k2.7-code
+# agent: kimi-cli
+# agent_kwargs:
+#   base_url: https://api.cloudflare.com/client/v4/accounts/<ACCOUNT_ID>/ai/v1
+# agent_env:
+#   OPENAI_API_KEY: env:CLOUDFLARE_API_TOKEN
+# model_pricing:
+#   openai/@cf/moonshotai/kimi-k2.7-code:
+#     input_per_million: 0.95
+#     cached_input_per_million: 0.19
+#     output_per_million: 4.00
+
+# Antigravity CLI alternative (docs/reference/coordinator.md#antigravity-cli);
+# the image should carry the CLI, the 3.x flash models need an effort:
+# model: google/gemini-3.8-flash
+# agent: antigravity-cli
+# agent_import_path: swecraft_runner.harbor_agents:SwecraftAntigravityCli   # token counters
+# agent_kwargs: {reasoning_effort: medium}
+# agent_env:
+#   GEMINI_API_KEY: env:GEMINI_API_KEY
+
+# pi alternative (docs/reference/coordinator.md#pi); the image must carry pi
+# (images/agent-pi in the experiment template):
+# model: anthropic/claude-opus-5
+# agent: pi                            # ledger label only
+# agent_import_path: swecraft_runner.harbor_agents:SwecraftPi
+# agent_kwargs: {thinking: medium}
+
+agents:
+  - name: demo-bot        # forge username; also the git author identity
+    repo: swecraft/demo        # the one-repository maintainer; or a private home
+    # home_repo: demo-bot/home   # created private if missing and agent-owned
+    # write_repos: [swecraft/demo, swecraft/tool]   # the repositories it maintains
+    # image / model / agent / interval_seconds / timeout_seconds override
+    # agent: codex        # Harbor's stock agent, if it differs per agent
+    # agent_import_path: swecraft_runner.harbor_agents:SwecraftPi   # or a class, per agent
+    # agent_env:          # layered over the global map, for this agent only
+    #   CLAUDE_CODE_OAUTH_TOKEN: file:.swecraft/credentials/demo-bot
+
+
+# Other settings and their defaults:
+# agent: claude-code              # Harbor's stock agent for every wake
+# agent_kwargs: {}                 # non-secret Harbor constructor options
+# agent_import_path: ""            # Harbor agent class in place of the stock agent
+# wake_mode: single-task           # or long-wake: run until wake_budget is spent
+# wake_budget: {turns: 0, seconds: 0, usd: 0}   # long-wake only; 0 = unlimited
+# push_url: http://host.docker.internal:<forge port>
+# runs_dir: .swecraft/runs
+# database: .swecraft/coordinator.db
+# credentials_dir: .swecraft/coordinator/credentials
+# memory_branch: agent/memory
+# interval_seconds: 1800
+# timeout_seconds: 1800
+# failure_backoff_seconds: 300
+# max_backoff_seconds: 21600
+# workers: 1                      # wakes in flight at once, across all agents
+# daily_wake_limit: 48            # per agent, per UTC day; 0 disables
+# daily_cost_limit_usd: 0         # per agent, per UTC day; 0 disables
+#
+# Boundary cadences: after every N completed wakes the serve loop drains
+# in-flight work and acts at the quiet step boundary; 0 disables. When
+# both fire on the same boundary, evaluation runs before the checkpoint
+# so its record enters the capture.
+# checkpoint_every_wakes: 20
+# checkpoint_keep: 5               # prune older boundary checkpoints
+# checkpoint_publish: false        # publish each boundary checkpoint (HF)
+# evaluate_every_wakes: 20
+# evaluate_command: [uv, run, --package, swecraft-evaluator, swecraft-evaluator,
+#                    run, society-general, --env, world@latest]
+# evaluate_timeout_seconds: 3600
+# model_pricing: {}                # fallback token rates keyed by exact model
+# retention_days: 14              # days to keep run directories; 0 disables

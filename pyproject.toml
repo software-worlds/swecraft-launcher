@@ -1,0 +1,44 @@
+[project]
+name = "simulation-workspace"
+version = "0.1.0"
+description = "Root uv workspace for the simulation's Python components"
+requires-python = ">=3.12"
+dependencies = []
+
+[dependency-groups]
+dev = ["ruff>=0.12,<1"]
+
+[tool.uv]
+package = false
+
+[tool.uv.workspace]
+members = [
+    "packages/swecraft-common",
+    "packages/swecraft-launch",
+    "services/analyzer",
+    "services/coordinator",
+    "services/evaluator",
+    "services/forge",
+    "services/index-cap",
+    "services/runner",
+    "services/society",
+    "services/world",
+]
+
+[tool.uv.sources]
+swecraft-analyzer = { workspace = true }
+swecraft-common = { workspace = true }
+swecraft-launch = { workspace = true }
+swecraft-coordinator = { workspace = true }
+swecraft-evaluator = { workspace = true }
+swecraft-forge = { workspace = true }
+swecraft-index-cap = { workspace = true }
+swecraft-runner = { workspace = true }
+swecraft-society = { workspace = true }
+swecraft-world = { workspace = true }
+
+[tool.ruff]
+line-length = 88
+
+[tool.ruff.lint]
+select = ["B", "E", "F", "I", "UP"]

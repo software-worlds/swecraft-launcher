@@ -1,0 +1,27 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "swecraft-runner"
+version = "0.1.0"
+description = "Run one Harbor coding agent against one Git repository"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = ["pyyaml>=6,<7", "typer>=0.16,<1"]
+
+[project.scripts]
+swecraft-runner = "swecraft_runner.cli:app"
+swecraft-harbor = "swecraft_runner.harbor_cli:main"
+
+[dependency-groups]
+dev = ["ruff>=0.12,<1"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/swecraft_runner"]
+
+[tool.ruff]
+line-length = 88
+
+[tool.ruff.lint]
+select = ["B", "E", "F", "I", "UP"]

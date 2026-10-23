@@ -1,0 +1,1 @@
+{"schema":"sim-browser/bundle-v1","id":"f1324ffecc31a1343b346ec9dffbd8f2c8f3b271","size":99,"binary":false,"text":{"text":"_GRAMMAR = None\n\n\ndef parse(text):\n    grammar = _GRAMMAR or load()\n    return grammar.parse(text)\n","redacted":0,"truncated":false},"bytes":null}

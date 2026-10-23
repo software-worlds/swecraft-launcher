@@ -1,0 +1,46 @@
+# FILL: header — which downstream projects judge this world, why they can see
+# it (each imports a world repository), and where the timeouts come from.
+# Schema: services/evaluator/src/swecraft_evaluator/manifest.py; reference:
+# docs/reference/evaluator.md; a second instance: examples/evaluation.yaml.
+
+world_lock: world.lock.json
+
+# subjects: how each world repository installs into a judge's container. The
+# evaluator fetches the repository at the measured commit and mounts it at
+# /eval/sources/<repo>. Containers run with --network none and installs use
+# --no-build-isolation, so every build backend must already be in the image.
+subjects:
+  example:                             # FILL: one per world repository a judge imports
+    install:
+      - argv: [python, -m, pip, install, --no-deps, --force-reinstall,
+               --no-build-isolation, /eval/sources/example]
+        timeout_seconds: 120           # measured, not guessed
+
+# evaluators: frozen downstream projects baked into images, their checkout at
+# /study/ruler (images/ruler). The gate proves correctness first: a failed gate
+# voids every task, so a broken world scores null, never a number.
+evaluators:
+  ruler:                               # FILL: one per downstream project
+    image: swecraft-eval-ruler:1            # FILL: the images/ruler build
+    subjects: [example]
+    gate:
+      argv: [python, -m, pytest, -q, tests/]
+      cwd: /study/ruler
+      timeout_seconds: 300             # measured, times a margin
+    tasks:
+      benchmarks:
+        # codspeed-* metrics need a plain pytest argv without instrument
+        # flags; the evaluator adds pytest-codspeed and Callgrind itself.
+        command:
+          argv: [python, -m, pytest, -q, benchmarks/]
+          cwd: /study/ruler
+          timeout_seconds: 600
+        metrics: [codspeed-cpu-sim]
+
+# evaluations: the named sweep the run measures (EVALUATION in
+# experiment.env), its one metric, and how task speedups fold into one number.
+evaluations:
+  society-sim:
+    tasks: [ruler@benchmarks]
+    metric: codspeed-cpu-sim
+    aggregates: [geomean]

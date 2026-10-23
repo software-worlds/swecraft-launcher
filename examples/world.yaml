@@ -1,0 +1,42 @@
+# World definition example. Copy beside an experiment as world.yaml, adjust,
+# and commit it: unlike coordinator.yaml, this file is experiment intent rather
+# than machine-local runtime configuration. The seeder writes world.lock.json
+# beside it; commit that generated provenance too.
+
+schema_version: 1
+world_id: experiment-2
+org: swecraft
+# Repositories default to public. Set `visibility: private` on each entry for
+# isolated/no-collaboration experiment arms.
+repos:
+  - name: typing-extensions
+    upstream: https://github.com/python/typing_extensions.git
+    pin:
+      type: tag
+      value: 4.16.0
+    default_branch: main
+    seed_protocol: relocate-github-actions-v1
+
+  - name: pydantic
+    upstream: https://github.com/pydantic/pydantic.git
+    pin:
+      type: tag
+      value: v2.13.4
+    default_branch: main
+    seed_protocol: relocate-github-actions-v1
+
+  - name: starlette
+    upstream: https://github.com/Kludex/starlette.git
+    pin:
+      type: tag
+      value: 1.3.1
+    default_branch: main
+    seed_protocol: relocate-github-actions-v1
+
+  - name: tiktoken
+    upstream: https://github.com/openai/tiktoken.git
+    pin:
+      type: tag
+      value: 0.13.0
+    default_branch: main
+    seed_protocol: relocate-github-actions-v1

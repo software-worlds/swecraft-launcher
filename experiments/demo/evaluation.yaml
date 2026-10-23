@@ -1,0 +1,56 @@
+# One judge: wsproto at 820701ba, which imports h11 for its HTTP/1.1 opening
+# handshake. Its four tasks are wsproto's own benchmark and tested workloads,
+# adapted for CodSpeed (images/wsproto/overlay); from eval set v2.2 of the
+# 26-repo world, where they were calibrated.
+
+world_lock: world.lock.json
+
+subjects:
+  h11:
+    install:
+      - argv: [python, -m, pip, install, --no-cache-dir, --no-deps, --force-reinstall,
+               --no-build-isolation, /eval/sources/h11]
+        env: {SETUPTOOLS_SCM_PRETEND_VERSION: 0.16.0}
+        timeout_seconds: 300
+
+evaluators:
+  wsproto:
+    image: demo-eval-wsproto:1
+    subjects: [h11]
+    gate:
+      argv: [python, -m, pytest, -q, tests/test_connection.py, tests/test_handshake.py,
+             tests/test_permessage_deflate.py]
+      cwd: /study/ruler
+      timeout_seconds: 300
+    tasks:
+      connection-large-messages:
+        command:
+          argv: [python, -m, pytest, .swecraft-eval/overlay/test_benchmarks.py::test_connection_large_messages]
+          cwd: /study/ruler
+          timeout_seconds: 600
+        metrics: [codspeed-walltime, codspeed-cpu-sim]
+      fragmented-text-stream:
+        command:
+          argv: [python, -m, pytest, .swecraft-eval/overlay/test_benchmarks.py::test_fragmented_text_stream]
+          cwd: /study/ruler
+          timeout_seconds: 600
+        metrics: [codspeed-walltime, codspeed-cpu-sim]
+      permessage-deflate-roundtrip:
+        command:
+          argv: [python, -m, pytest, .swecraft-eval/overlay/test_benchmarks.py::test_permessage_deflate_roundtrip]
+          cwd: /study/ruler
+          timeout_seconds: 600
+        metrics: [codspeed-walltime, codspeed-cpu-sim]
+      h11-opening-handshake:
+        command:
+          argv: [python, -m, pytest, .swecraft-eval/overlay/test_benchmarks.py::test_h11_opening_handshake]
+          cwd: /study/ruler
+          timeout_seconds: 600
+        metrics: [codspeed-walltime, codspeed-cpu-sim]
+
+evaluations:
+  society-sim:
+    tasks: [wsproto@connection-large-messages, wsproto@fragmented-text-stream,
+            wsproto@permessage-deflate-roundtrip, wsproto@h11-opening-handshake]
+    metric: codspeed-cpu-sim
+    aggregates: [geomean]

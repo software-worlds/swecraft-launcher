@@ -1,0 +1,15 @@
+# The smallest real world: one library, h11 (the HTTP/1.1 state machine under
+# httpcore, uvicorn and wsproto), pinned at v0.16.0. Its judge, wsproto, imports
+# h11 for its opening handshake (evaluation.yaml). A demo of the whole path,
+# not a research world: one maintainer, one judge.
+
+schema_version: 1
+world_id: demo
+org: swecraft
+repos:
+  - name: h11
+    upstream: https://github.com/python-hyper/h11.git
+    pin: {type: tag, value: v0.16.0}
+    visibility: public
+    default_branch: main
+    seed_protocol: relocate-github-actions-v1

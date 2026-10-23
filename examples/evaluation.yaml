@@ -1,0 +1,69 @@
+# Evaluation manifest: the complete human-authored surface of the evaluator.
+# Schema: services/evaluator/src/swecraft_evaluator/manifest.py; reference:
+# docs/reference/evaluator.md. Campaign manifests live apparatus-side on
+# exp/<name> branches; this example shows the shape only.
+
+world_lock: world.lock.json
+
+# subjects — how each world repository installs into an evaluator container.
+# Sources are fetched from the Forge at the environment's exact commits and
+# mounted at /eval/sources/<repo>. Containers run --network none, so every
+# build backend must already be in the evaluator image.
+subjects:
+  h11:
+    install:
+      - argv: [python, -m, pip, install, --no-deps, --no-build-isolation, /eval/sources/h11]
+        timeout_seconds: 120
+  msgpack:
+    install:
+      - argv: [python, -m, pip, install, --no-deps, --no-build-isolation, /eval/sources/msgpack]
+        # Projects deriving their version from git metadata need a pretend
+        # version: sources arrive as archives without .git.
+        env: {SETUPTOOLS_SCM_PRETEND_VERSION: 0.0.0}
+        timeout_seconds: 300
+
+# evaluators — frozen downstream projects baked into container images (their
+# checkout lives at /study/ruler). The gate proves correctness first; a
+# failed gate voids every task, so a broken world scores null, never a number.
+evaluators:
+  wsproto:
+    image: eval-wsproto:1
+    subjects: [h11]
+    gate:
+      argv: [python, -m, pytest, -q, tests/]
+      timeout_seconds: 300
+    tasks:
+      connection:
+        # Workload commands only. For codspeed-* metrics the argv must be a
+        # direct pytest invocation with no instrument flags; the harness
+        # appends pytest-codspeed and Callgrind instrumentation itself.
+        command:
+          argv: [python, -m, pytest, bench/test_connection.py, -q]
+          timeout_seconds: 600
+        walltime_repeats: 3
+        metrics: [walltime, codspeed-walltime, codspeed-cpu-sim]
+  cattrs:
+    image: eval-cattrs:1
+    subjects: [msgpack]
+    gate:
+      argv: [python, -m, pytest, -q, tests/test_unstructure.py]
+      timeout_seconds: 300
+    tasks:
+      roundtrip:
+        command:
+          argv: [python, -m, pytest, bench/test_roundtrip.py, -q]
+          timeout_seconds: 900
+        metrics: [codspeed-cpu-sim]
+
+# evaluations — named shortcuts the CLI and loop run: a task list, exactly
+# one metric (every referenced task must declare it), and the aggregates
+# folding task speedups into one number. On a new release of repository X
+# the loop runs downstream-X when defined, else its cadence evaluation.
+evaluations:
+  society-general:
+    tasks: [wsproto@connection, cattrs@roundtrip]
+    metric: codspeed-cpu-sim
+    aggregates: [geomean]
+  downstream-msgpack:
+    tasks: [cattrs@roundtrip]
+    metric: codspeed-cpu-sim

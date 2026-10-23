@@ -1,0 +1,16 @@
+#!/bin/sh
+# Manual fallback: the fj wrapper self-authenticates on first use, so this
+# is only needed for debugging or after clearing fj's key store.
+
+set -eu
+
+token=${SWECRAFT_FORGE_TOKEN:-${SWECRAFT_FORGE_READ_TOKEN:-}}
+if [ -z "$token" ]; then
+    echo "forge-login: neither SWECRAFT_FORGE_TOKEN nor SWECRAFT_FORGE_READ_TOKEN is set" >&2
+    exit 2
+fi
+
+url=${SWECRAFT_FORGE_URL:-http://host.docker.internal:3400}
+fj-bin --host "$url" auth add-token "$token"
+touch /tmp/.swecraft-fj-ready
+echo "forge-login: fj configured for $url"

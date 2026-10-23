@@ -1,0 +1,147 @@
+#!/bin/sh
+# fj wrapper: injects the baked forge URL and self-authenticates from the
+# per-run token on first use, so agents run plain `fj issue view "o/r#1"`
+# with no --host flag and no login step. Prefers SWECRAFT_FORGE_TOKEN (direct-
+# action runs) over SWECRAFT_FORGE_READ_TOKEN.
+#
+# It also records what the wake did to the forge. What it records is the
+# invocation: argument vector, exit code, and output. Which action a command
+# performed is decided on the host, by the runner, from this record. Two
+# properties follow from that split, and both are the reason for it:
+#
+#   - A subcommand this file has never heard of is still recorded, so the
+#     vocabulary can be corrected or extended later and re-applied to runs
+#     already collected. Nothing is lost by classifying a command wrongly,
+#     because no classification happens here.
+#   - No secret is written inside the sandbox, and no secret list has to be
+#     shipped in to scrub one. The run's secret list stays on the host, where
+#     redaction happens at collection.
+#
+# Reads keep the `exec` fast path: no capture, no buffering, no new failure
+# mode. The list below is of read-only subcommands, so a subcommand nobody has
+# classified is captured rather than dropped, and being wrong about one costs
+# a buffered command rather than a missing record.
+
+set -eu
+
+url=${SWECRAFT_FORGE_URL:-http://host.docker.internal:3400}
+marker=/tmp/.swecraft-fj-ready
+calls=${SWECRAFT_FORGE_CALLS:-/app/.swecraft/forge-calls}
+max_bytes=${SWECRAFT_FORGE_CALL_MAX_BYTES:-8192}
+
+case " $* " in
+    *" --host "*) exec fj-bin "$@" ;;
+esac
+
+token=${SWECRAFT_FORGE_TOKEN:-${SWECRAFT_FORGE_READ_TOKEN:-}}
+if [ -n "$token" ] && [ ! -e "$marker" ]; then
+    if fj-bin --host "$url" auth add-token "$token" \
+        >/dev/null 2>&1; then
+        touch "$marker"
+    fi
+fi
+
+# Groups that never act on a repository, and `auth`, whose argument vector is
+# a credential and must not be recorded even in a file the host later redacts.
+case "${1:-}" in
+    ""|help|version|auth|config|completion|-*)
+        exec fj-bin --host "$url" "$@" ;;
+esac
+
+# Read-only verbs. Matched on the verb alone across every group: `fj pr view`
+# and `fj repo view` read for the same reason, and a verb wrongly listed here
+# is the only way this wrapper can lose a record.
+case "${2:-}" in
+    view|list|search|browse|checkout|clone|download|contents|readme|status|\
+    templates|tasks|activity|following|followers|repos|orgs|members|\
+    star-status|watch-status|help)
+        exec fj-bin --host "$url" "$@" ;;
+esac
+
+# Everything else is captured. stdout and stderr go to files and are replayed
+# rather than streamed, so the two stay separate and the exit code is the
+# CLI's own. Interleaving between them is lost; these subcommands emit a line
+# or two, so nothing depends on it.
+out=$(mktemp) || exec fj-bin --host "$url" "$@"
+err=$(mktemp) || { rm -f "$out"; exec fj-bin --host "$url" "$@"; }
+
+set +e
+fj-bin --host "$url" "$@" >"$out" 2>"$err"
+rc=$?
+set -e
+
+cat "$out"
+cat "$err" >&2
+
+# Everything below is bookkeeping: it must never change what the agent saw or
+# what the caller gets back. Any failure here is swallowed, and the exit code
+# is the CLI's from this point on.
+#
+# One file per call rather than appended lines: an agent may run fj in the
+# background, and a record carrying up to 8 KiB of output exceeds the size an
+# append is atomic at. The host reads the directory in timestamp order.
+record_call() (
+    command -v jq >/dev/null 2>&1 || return 0
+    mkdir -p "$calls" || return 0
+    # The X's must end the template: mktemp does not substitute them when a
+    # suffix follows, so `call-XXXX.json` names one shared file that every
+    # call overwrites.
+    file=$(mktemp "$calls/call-XXXXXXXXXX") || return 0
+    ocap=$(mktemp) || return 0
+    ecap=$(mktemp) || { rm -f "$ocap"; return 0; }
+    head -c "$max_bytes" <"$out" >"$ocap" 2>/dev/null || true
+    head -c "$max_bytes" <"$err" >"$ecap" 2>/dev/null || true
+    # NUL-delimited rather than jq's `--args`: an argument may contain quotes,
+    # spaces, or newlines, and `--args` does not stop jq from reading a
+    # leading `-` as one of its own options, so `fj issue create --title x`
+    # produced no record at all.
+    argv=$(printf '%s\0' "$@" | jq -Rs 'split("\u0000")[:-1]') || return 0
+    # A body passed by file (`--body-file notes.md`) is what the forge
+    # received, and the file stays inside the sandbox; the argument vector
+    # alone would preserve only its name. Read it now, capped like the
+    # output, so the words posted are in the record. A body on stdin
+    # is not captured: reading it here could block on a harness that keeps
+    # the pipe open, and the wrapper must never change what fj sees.
+    body_file=
+    prev=
+    for arg in "$@"; do
+        case "$prev" in
+            --body-file|--notes-file|--description-file) body_file=$arg ;;
+        esac
+        case "$arg" in
+            --body-file=*|--notes-file=*|--description-file=*) body_file=${arg#*=} ;;
+        esac
+        prev=$arg
+    done
+    bcap=$(mktemp) || { rm -f "$ocap" "$ecap"; return 0; }
+    has_body=false
+    if [ -n "$body_file" ] && [ -f "$body_file" ] && [ -r "$body_file" ]; then
+        head -c "$max_bytes" <"$body_file" >"$bcap" 2>/dev/null && has_body=true
+    fi
+    jq -cn \
+        --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+        --arg cwd "$PWD" \
+        --arg actor "${SWECRAFT_AGENT:-}" \
+        --argjson exit "$rc" \
+        --argjson argv "$argv" \
+        --rawfile stdout "$ocap" \
+        --rawfile stderr "$ecap" \
+        --rawfile body "$bcap" \
+        --argjson has_body "$has_body" \
+        '{
+            ts: $ts,
+            tool: "fj",
+            cwd: $cwd,
+            actor: (if $actor == "" then null else $actor end),
+            exit: $exit,
+            argv: $argv,
+            stdout: $stdout,
+            stderr: $stderr,
+            body: (if $has_body then $body else null end)
+        }' >"$file"
+    rm -f "$ocap" "$ecap" "$bcap"
+)
+record_call "$@" 2>/dev/null || true
+
+rm -f "$out" "$err" 2>/dev/null || true
+exit "$rc"

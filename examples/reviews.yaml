@@ -1,0 +1,34 @@
+# End-of-run review batch: `swecraft-coordinator --config coordinator.yaml review reviews.yaml`
+#
+# Review turns are wake-shaped with all write authority removed: the agent
+# gets its repository at its final state, its memory workspace at
+# /app/memory (edits there are never published), and a browsable forge via
+# SWECRAFT_FORGE_URL — no token, no push remote. Nothing else is staged: the
+# agent reconstructs the run from its own record and answers through the
+# staged review CLI, one question at a time, with stop-and-resume state.
+#
+# Peer reviews are agent-selected: one turn per evaluator, in which the
+# agent picks its own review targets from the roster and completes one
+# full review per target. Declaring "no meaningful interactions" is a
+# legitimate answer.
+#
+# The society review asks every listed agent (default: all configured)
+# about the society's coordination and infrastructure.
+#
+# Re-running the command dispatches only jobs without a valid answer; the
+# batch seals at <output_dir>/<batch_id>/record.json once every job has one.
+
+run_id: my-run
+# batch_id: my-run-final      # several batches per run, one directory each
+output_dir: .swecraft/reviews       # resolved relative to the working directory
+default_revision: main
+# include_memory: false        # only for worlds without agent/memory branches
+
+peer_reviews:
+  enabled: true
+  # agents: [urllib3-bot, requests-bot]   # evaluators; default: all configured
+  # max_targets: 8                        # guardrail, not a quota
+
+society_review:
+  enabled: true
+  # agents: [urllib3-bot, requests-bot]   # default: every configured agent

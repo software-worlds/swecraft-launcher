@@ -1,0 +1,547 @@
+# Vocabulary for wake forge actions.
+#
+# The runner reads this to turn recorded invocations into ledger rows. The
+# wrappers in the runner image record what was run and write nothing else, so
+# every decision about what an action *was* is made here, on the host, after
+# the fact. A row derived wrongly can be derived again from the same recording;
+# nothing in this file is load-bearing at the time an agent runs.
+#
+# ## Record shape
+#
+#   {"ts", "source", "actor", "repo", "action", "metadata", "cmd"}
+#
+# `action` comes from `action:` below. `metadata` carries exactly the keys in
+# that action's `metadata:` list — a key with no source for the producer that
+# wrote the row is null, which is the honest answer to "this producer cannot
+# know it" rather than a gap in the table.
+#
+# ## Matching
+#
+# Entries are tried in document order and the first match wins, so an entry
+# carrying `when:` must appear before the unconditional entry it narrows.
+# A repository-scoped call matching nothing becomes `other`, keeping its
+# repository and command. A call naming no repository is not recorded.
+#
+# `repo` comes from the `{owner}`/`{repo}` captures on the `forge` side. On the
+# `fj` side it comes from an `owner/name` or `owner/name#7` argument, or
+# `--repo`, and falls back to the repository the run checked out.
+#
+# ## Path patterns
+#
+#   {name}       one path segment, captured
+#   {name:int}   one path segment of digits, captured as a number
+#
+# The leading `/api/v1` is tolerated; agents sometimes include it even though
+# the wrapper adds one.
+#
+# ## Sources, for `with:`
+#
+#   {const: X}          a fixed value
+#   {arg: number}       first `#7` or bare integer among the arguments
+#   {arg: first}        first positional argument that is neither flag nor repo
+#   {arg: last}         last positional argument
+#   {arg: rest}         every remaining positional argument, as a list
+#   {arg: basename}     basename of the last positional argument
+#   {out: number}       the number fj announced, as in `created issue #34`
+#   {path: name}        a capture from the matched path
+#   {request: key}      a key from the request JSON, from `-d`
+#   {response: key}     a key from the response JSON
+#   {choice: {...}}     first flag present wins, mapping flag to value
+#   {first: [...]}      first source that yields a value
+#   {lookup: {...}, from: <source>}
+#                       translate a value; anything unlisted passes through
+#                       lowercased
+#
+# ## Conditions, for `when:`
+#
+#   {<source-key>: present}   the value exists and is neither null nor empty
+#   {<source-key>: <value>}   the value equals this
+#
+# `{request: state}` is written `request.state` in `when:`.
+
+version: 1
+
+# Read-only `fj` verbs. The wrapper keeps its `exec` fast path for these and
+# captures everything else, so a verb listed here wrongly is the one way a
+# mutation goes unrecorded. The list is duplicated in
+# services/runner-image/fj-wrapper, because that decision is made in shell
+# before any of this file is reachable; tests assert the two agree.
+fj_read_verbs:
+  - view
+  - list
+  - search
+  - browse
+  - checkout
+  - clone
+  - download
+  - contents
+  - readme
+  - status
+  - templates
+  - tasks
+  - activity
+  - following
+  - followers
+  - repos
+  - orgs
+  - members
+  - star-status
+  - watch-status
+  - help
+
+# `fj` groups that never act on a repository. `auth` is here because its
+# argument vector is a credential and must not be recorded at all.
+fj_read_groups:
+  - help
+  - version
+  - auth
+  - config
+  - completion
+
+actions:
+  - action: pr.create
+    metadata: [number]
+    fj:
+      - words: [pr, create]
+        with:
+          number: {out: number}
+    forge:
+      - method: POST
+        path: /repos/{owner}/{repo}/pulls
+        with:
+          number: {response: number}
+
+  - action: pr.assign
+    metadata: [pr, assignees, removed]
+    fj:
+      - words: [pr, assign]
+        with:
+          pr: {arg: number}
+          assignees: {arg: rest}
+          removed: {const: false}
+      - words: [pr, unassign]
+        with:
+          pr: {arg: number}
+          assignees: {arg: rest}
+          removed: {const: true}
+    forge:
+      - method: PATCH
+        path: /repos/{owner}/{repo}/pulls/{number:int}
+        when: {request.assignees: present}
+        with:
+          pr: {path: number}
+          assignees: {request: assignees}
+          removed: {const: false}
+
+  - action: pr.edit
+    metadata: [number]
+    fj:
+      - words: [pr, edit]
+        with:
+          number: {arg: number}
+    forge:
+      - method: POST
+        path: /repos/{owner}/{repo}/pulls/{number:int}/ready_for_review
+        with:
+          number: {path: number}
+      - method: PATCH
+        path: /repos/{owner}/{repo}/pulls/{number:int}
+        with:
+          number: {path: number}
+
+  - action: pr.close
+    metadata: [number]
+    fj:
+      - words: [pr, close]
+        with:
+          number: {arg: number}
+
+  - action: pr.merge
+    metadata: [number, method]
+    fj:
+      - words: [pr, merge]
+        with:
+          number: {arg: number}
+          method:
+            choice:
+              "--squash": squash
+              "--rebase": rebase
+              "--merge": merge
+    forge:
+      - method: POST
+        path: /repos/{owner}/{repo}/pulls/{number:int}/merge
+        with:
+          number: {path: number}
+          method: {request: merge_method}
+
+  - action: pr.comment
+    metadata: [pr, comment_id]
+    fj:
+      - words: [pr, comment]
+        with:
+          pr: {arg: number}
+    forge:
+      # Same endpoint as an issue comment; the response says which it was.
+      - method: POST
+        path: /repos/{owner}/{repo}/issues/{number:int}/comments
+        when: {response.pull_request_url: present}
+        with:
+          pr: {path: number}
+          comment_id: {response: id}
+
+  - action: pr.review
+    metadata: [pr, review_id, state]
+    fj:
+      - words: [pr, review]
+        with:
+          pr: {arg: number}
+          state:
+            choice:
+              "--approve": approved
+              "--request-changes": changes_requested
+              "--comment": commented
+    forge:
+      - method: POST
+        path: /repos/{owner}/{repo}/pulls/{number:int}/reviews/{review:int}/events
+        with:
+          pr: {path: number}
+          review_id: {path: review}
+          state:
+            from: {request: event}
+            lookup:
+              approve: approved
+              request_changes: changes_requested
+              comment: commented
+      - method: POST
+        path: /repos/{owner}/{repo}/pulls/{number:int}/reviews
+        with:
+          pr: {path: number}
+          review_id: {response: id}
+          state:
+            from: {first: [{response: state}, {request: event}]}
+            lookup:
+              approve: approved
+              request_changes: changes_requested
+              comment: commented
+
+  - action: issue.create
+    metadata: [number]
+    fj:
+      - words: [issue, create]
+        with:
+          number: {out: number}
+    forge:
+      - method: POST
+        path: /repos/{owner}/{repo}/issues
+        with:
+          number: {response: number}
+
+  - action: issue.close
+    metadata: [number]
+    fj:
+      - words: [issue, close]
+        with:
+          number: {arg: number}
+    forge:
+      # The request only, never the response. The response reports the object's
+      # current state, so reading it there recorded every edit of an
+      # already-closed issue as another close.
+      - method: PATCH
+        path: /repos/{owner}/{repo}/issues/{number:int}
+        when: {request.state: closed}
+        with:
+          number: {path: number}
+
+  - action: issue.edit
+    metadata: [number]
+    fj:
+      - words: [issue, edit]
+        with:
+          number: {arg: number}
+    forge:
+      - method: PATCH
+        path: /repos/{owner}/{repo}/issues/{number:int}
+        with:
+          number: {path: number}
+
+  - action: issue.comment
+    metadata: [issue, comment_id]
+    fj:
+      - words: [issue, comment]
+        with:
+          issue: {arg: number}
+    forge:
+      - method: POST
+        path: /repos/{owner}/{repo}/issues/{number:int}/comments
+        with:
+          issue: {path: number}
+          comment_id: {response: id}
+
+  - action: thread.react
+    metadata: [number, reaction, removed]
+    forge:
+      - method: POST
+        path: /repos/{owner}/{repo}/issues/{number:int}/reactions
+        with:
+          number: {path: number}
+          reaction: {request: content}
+          removed: {const: false}
+      - method: DELETE
+        path: /repos/{owner}/{repo}/issues/{number:int}/reactions
+        with:
+          number: {path: number}
+          reaction: {request: content}
+          removed: {const: true}
+
+  - action: issue.assign
+    metadata: [issue, assignees, removed]
+    fj:
+      - words: [issue, assign]
+        with:
+          issue: {arg: number}
+          assignees: {arg: rest}
+          removed: {const: false}
+      - words: [issue, unassign]
+        with:
+          issue: {arg: number}
+          assignees: {arg: rest}
+          removed: {const: true}
+
+  - action: comment.edit
+    metadata: [comment_id]
+    forge:
+      - method: PATCH
+        path: /repos/{owner}/{repo}/issues/comments/{comment:int}
+        with:
+          comment_id: {path: comment}
+
+  - action: comment.delete
+    metadata: [comment_id]
+    forge:
+      - method: DELETE
+        path: /repos/{owner}/{repo}/issues/comments/{comment:int}
+        with:
+          comment_id: {path: comment}
+
+  - action: comment.react
+    metadata: [comment_id, reaction, removed]
+    forge:
+      - method: POST
+        path: /repos/{owner}/{repo}/issues/comments/{comment:int}/reactions
+        with:
+          comment_id: {path: comment}
+          reaction: {request: content}
+          removed: {const: false}
+      - method: DELETE
+        path: /repos/{owner}/{repo}/issues/comments/{comment:int}/reactions
+        with:
+          comment_id: {path: comment}
+          reaction: {request: content}
+          removed: {const: true}
+
+  - action: release.create
+    metadata: [tag, id]
+    fj:
+      - words: [release, create]
+        with:
+          # The flag that names the tag wins; the trailing positional is the
+          # fallback, and is the release *title* whenever a flag carried the
+          # tag (`--tag 3.20 ... "idna 3.20"`).
+          tag: {first: [{flag: [--tag, -t, --create-tag, -T]}, {arg: first}]}
+    forge:
+      - method: POST
+        path: /repos/{owner}/{repo}/releases
+        with:
+          tag: {first: [{response: tag_name}, {request: tag_name}]}
+          id: {response: id}
+
+  - action: release.edit
+    metadata: [tag, id]
+    fj:
+      - words: [release, edit]
+        with:
+          tag: {arg: first}
+    forge:
+      - method: PATCH
+        path: /repos/{owner}/{repo}/releases/{release:int}
+        with:
+          tag: {first: [{response: tag_name}, {request: tag_name}]}
+          id: {path: release}
+
+  - action: release.delete
+    metadata: [tag, id]
+    fj:
+      - words: [release, delete]
+        with:
+          tag: {arg: first}
+    forge:
+      - method: DELETE
+        path: /repos/{owner}/{repo}/releases/{release:int}
+        with:
+          tag: {first: [{response: tag_name}, {request: tag_name}]}
+          id: {path: release}
+
+  - action: release.asset
+    metadata: [release_id, name, removed]
+    fj:
+      - words: [release, asset, create]
+        with:
+          name: {arg: basename}
+          removed: {const: false}
+      - words: [release, asset, delete]
+        with:
+          name: {arg: basename}
+          removed: {const: true}
+    forge:
+      - method: POST
+        path: /repos/{owner}/{repo}/releases/{release:int}/assets
+        with:
+          release_id: {path: release}
+          name: {first: [{response: name}, {request: name}]}
+          removed: {const: false}
+      - method: DELETE
+        path: /repos/{owner}/{repo}/releases/{release:int}/assets/{asset:int}
+        with:
+          release_id: {path: release}
+          name: {response: name}
+          removed: {const: true}
+
+  - action: tag.create
+    metadata: [tag]
+    fj:
+      - words: [tag, create]
+        with:
+          tag: {arg: first}
+
+  - action: tag.delete
+    metadata: [tag]
+    fj:
+      - words: [tag, delete]
+        with:
+          tag: {arg: first}
+    forge:
+      - method: DELETE
+        path: /repos/{owner}/{repo}/git/refs/tags/{tag}
+        with:
+          tag: {path: tag}
+
+  - action: ci.dispatch
+    metadata: [workflow]
+    fj:
+      - words: [actions, dispatch]
+        with:
+          workflow: {arg: first}
+    forge:
+      - method: POST
+        path: /repos/{owner}/{repo}/actions/workflows/{workflow}/dispatches
+        with:
+          workflow: {path: workflow}
+
+  - action: ci.rerun
+    metadata: [run]
+    forge:
+      - method: POST
+        path: /repos/{owner}/{repo}/actions/runs/{run:int}/rerun
+        with:
+          run: {path: run}
+
+  - action: ci.config
+    metadata: [kind, name, removed]
+    fj:
+      - words: [actions, variables, create]
+        with: {kind: {const: variable}, name: {arg: first}, removed: {const: false}}
+      - words: [actions, variables, delete]
+        with: {kind: {const: variable}, name: {arg: first}, removed: {const: true}}
+      - words: [actions, secrets, create]
+        with: {kind: {const: secret}, name: {arg: first}, removed: {const: false}}
+      - words: [actions, secrets, delete]
+        with: {kind: {const: secret}, name: {arg: first}, removed: {const: true}}
+
+  # Repository lifecycle carries its own names. Creating, forking, or deleting
+  # a repository is an action on one, and `repo.delete` is the row someone is
+  # most likely to go looking for.
+  - action: repo.create
+    metadata: []
+    fj:
+      - words: [repo, create]
+
+  - action: repo.fork
+    metadata: []
+    fj:
+      - words: [repo, fork]
+      - words: [repo, migrate]
+    forge:
+      - method: POST
+        path: /repos/{owner}/{repo}/forks
+
+  - action: repo.delete
+    metadata: []
+    fj:
+      - words: [repo, delete]
+    forge:
+      - method: DELETE
+        path: /repos/{owner}/{repo}
+
+  - action: repo.edit
+    metadata: []
+    fj:
+      - words: [repo, edit]
+      - words: [repo, units]
+    forge:
+      - method: PATCH
+        path: /repos/{owner}/{repo}
+
+  - action: repo.label
+    metadata: [name, removed]
+    fj:
+      - words: [repo, labels, create]
+        with: {name: {arg: first}, removed: {const: false}}
+      - words: [repo, labels, edit]
+        with: {name: {arg: first}, removed: {const: false}}
+      - words: [repo, labels, delete]
+        with: {name: {arg: first}, removed: {const: true}}
+    forge:
+      - method: POST
+        path: /repos/{owner}/{repo}/labels
+        with:
+          name: {first: [{response: name}, {request: name}]}
+          removed: {const: false}
+      - method: PATCH
+        path: /repos/{owner}/{repo}/labels/{label:int}
+        with:
+          name: {first: [{response: name}, {request: name}]}
+          removed: {const: false}
+      - method: DELETE
+        path: /repos/{owner}/{repo}/labels/{label:int}
+        with:
+          removed: {const: true}
+
+  - action: repo.star
+    metadata: ["on"]
+    fj:
+      - words: [repo, star]
+        with: {"on": {const: true}}
+      - words: [repo, unstar]
+        with: {"on": {const: false}}
+    forge:
+      - method: PUT
+        path: /user/starred/{owner}/{repo}
+        with: {"on": {const: true}}
+      - method: DELETE
+        path: /user/starred/{owner}/{repo}
+        with: {"on": {const: false}}
+
+  - action: repo.watch
+    metadata: ["on"]
+    fj:
+      - words: [repo, watch]
+        with: {"on": {const: true}}
+      - words: [repo, unwatch]
+        with: {"on": {const: false}}
+    forge:
+      - method: PUT
+        path: /repos/{owner}/{repo}/subscription
+        with: {"on": {const: true}}
+      - method: DELETE
+        path: /repos/{owner}/{repo}/subscription
+        with: {"on": {const: false}}

@@ -1,0 +1,100 @@
+name: ${COMPOSE_PROJECT_NAME:-swecraft-forge}
+
+services:
+  forgejo:
+    image: codeberg.org/forgejo/forgejo:15.0.4-rootless@sha256:aea6847e7e18130f173616a92433e47e00813bbe7b42e3732cbbb5f237164096
+    user: "1000:1000"
+    init: true
+    restart: unless-stopped
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      FORGEJO____APP_NAME: Hub Forge
+      FORGEJO__actions__ENABLED: "true"
+      FORGEJO__database__DB_TYPE: sqlite3
+      FORGEJO__database__PATH: /var/lib/gitea/data/forgejo.db
+      FORGEJO__log__MODE: console
+      FORGEJO__mailer__ENABLED: "false"
+      FORGEJO__packages__ENABLED: "false"
+      FORGEJO__repository__DEFAULT_REPO_UNITS: repo.code,repo.releases,repo.issues,repo.pulls,repo.actions
+      FORGEJO__repository__DISABLED_REPO_UNITS: repo.packages
+      FORGEJO__security__DISABLE_GIT_HOOKS: "true"
+      FORGEJO__security__INSTALL_LOCK: "true"
+      FORGEJO__security__INTERNAL_TOKEN_URI: file:/run/secrets/forgejo_internal_token
+      FORGEJO__security__SECRET_KEY_URI: file:/run/secrets/forgejo_secret_key
+      FORGEJO__server__DISABLE_SSH: "true"
+      FORGEJO__server__DOMAIN: ${SWECRAFT_FORGE_HOST:-127.0.0.1}
+      FORGEJO__server__HTTP_PORT: "3000"
+      FORGEJO__server__OFFLINE_MODE: "true"
+      FORGEJO__server__PROTOCOL: http
+      FORGEJO__server__ROOT_URL: http://${SWECRAFT_FORGE_HOST:-127.0.0.1}:${SWECRAFT_FORGE_PORT:-3400}/
+      FORGEJO__service__DISABLE_REGISTRATION: "true"
+      FORGEJO__service__REQUIRE_SIGNIN_VIEW: "false"
+    secrets:
+      - forgejo_internal_token
+      - forgejo_secret_key
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=128m,mode=1777
+    volumes:
+      - forgejo-data:/var/lib/gitea
+    ports:
+      # SWECRAFT_FORGE_BIND widens the published interface without changing the
+      # advertised ROOT_URL host (e.g. SWECRAFT_FORGE_BIND=0.0.0.0 just forge-up
+      # for LAN-readable forges); it defaults to SWECRAFT_FORGE_HOST.
+      - "${SWECRAFT_FORGE_BIND:-${SWECRAFT_FORGE_HOST:-127.0.0.1}}:${SWECRAFT_FORGE_PORT:-3400}:3000"
+    healthcheck:
+      test:
+        - CMD
+        - curl
+        - --fail
+        - --silent
+        - --show-error
+        - http://127.0.0.1:3000/api/healthz
+      interval: 5s
+      timeout: 3s
+      retries: 24
+      start_period: 20s
+    stop_grace_period: 30s
+
+  # Forgejo Actions execution (ported from PR #3): jobs run as containers
+  # inside an isolated Docker-in-Docker daemon, never on the host daemon.
+  dind:
+    # docker:28.3.3-dind
+    image: docker@sha256:a56b3bdde89315ed2cc0e4906e582b5033d93bf20d9cb9510c2cdd4e7f7690b1
+    privileged: true
+    restart: unless-stopped
+    command: ["dockerd", "-H", "tcp://0.0.0.0:2375", "--tls=false"]
+
+  runner:
+    # data.forgejo.org/forgejo/runner:12
+    image: data.forgejo.org/forgejo/runner@sha256:e070b166b921f12a2abef432cf6108e63519d0183722c2a14ecbb8d0b0621652
+    depends_on:
+      forgejo:
+        condition: service_healthy
+      dind:
+        condition: service_started
+    restart: unless-stopped
+    environment:
+      DOCKER_HOST: tcp://dind:2375
+    working_dir: /data
+    volumes:
+      - ${SWECRAFT_FORGE_STATE_DIR:-./state}/runner:/data
+    # Idle until bootstrap.sh registers the runner, then serve jobs.
+    command:
+      - sh
+      - -c
+      - >
+        while [ ! -s /data/.runner ]; do sleep 2; done;
+        exec forgejo-runner daemon --config /data/config.yml
+
+secrets:
+  forgejo_internal_token:
+    file: ${SWECRAFT_FORGE_STATE_DIR:-./state}/forgejo_internal_token
+  forgejo_secret_key:
+    file: ${SWECRAFT_FORGE_STATE_DIR:-./state}/forgejo_secret_key
+
+volumes:
+  forgejo-data:

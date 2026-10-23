@@ -1,0 +1,16 @@
+# FILL: one paragraph — the selection rule. Why THESE repositories, derived
+# from which ruler's declared dependency list. Rationale lives here, beside
+# the config it justifies, not in a separate design document.
+
+schema_version: 1
+world_id: experiment-N          # FILL
+org: swecraft
+repos:
+  - name: example               # FILL: one entry per repository
+    upstream: https://github.com/org/example.git
+    pin: {type: tag, value: v1.0.0}   # release tag, peeled at seed time
+    visibility: public          # use private for isolated/no-collaboration arms
+    default_branch: main
+    seed_protocol: relocate-github-actions-v1
+  # Control arms (no benchmark suite of their own) get a comment saying so
+  # and what question the arm answers.

@@ -1,0 +1,159 @@
+#!/bin/sh
+# Convenience wrapper for Forgejo reactions.
+#
+# All API traffic goes through `forge`, so authentication, exit behavior, and
+# wake action recording stay in one place.
+
+set -eu
+
+usage() {
+    cat <<'EOF'
+usage:
+  forge-react allowed
+  forge-react list issue <owner>/<repo>#<number>
+  forge-react list pr <owner>/<repo>#<number>
+  forge-react list comment <owner>/<repo> <comment-id>
+  forge-react add issue|pr <owner>/<repo>#<number> <reaction>
+  forge-react add comment <owner>/<repo> <comment-id> <reaction>
+  forge-react remove issue|pr <owner>/<repo>#<number> <reaction>
+  forge-react remove comment <owner>/<repo> <comment-id> <reaction>
+
+Examples:
+  forge-react allowed
+  forge-react add issue swecraft/rich#42 eyes
+  forge-react add pr swecraft/rich#7 +1
+  forge-react remove comment swecraft/rich 812 heart
+EOF
+}
+
+fail() {
+    echo "forge-react: $*" >&2
+    exit 2
+}
+
+validate_number() {
+    case "${1:-}" in
+        ""|*[!0-9]*) fail "$2 must be numeric" ;;
+    esac
+}
+
+validate_repo() {
+    case "${1:-}" in
+        */*) ;;
+        *) fail "repository must be owner/name" ;;
+    esac
+    if ! printf '%s' "$1" | grep -Eq '^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$'; then
+        fail "repository must be owner/name"
+    fi
+}
+
+set_thread_path() {
+    case "${1:-}" in
+        *"#"*) ;;
+        *) fail "issue/pr target must be owner/name#number" ;;
+    esac
+    repo=${1%#*}
+    number=${1##*#}
+    validate_repo "$repo"
+    validate_number "$number" "issue/pr number"
+    REACT_PATH="/repos/$repo/issues/$number/reactions"
+}
+
+set_comment_path() {
+    repo=${1:-}
+    comment_id=${2:-}
+    validate_repo "$repo"
+    validate_number "$comment_id" "comment id"
+    REACT_PATH="/repos/$repo/issues/comments/$comment_id/reactions"
+}
+
+allowed_json() {
+    forge GET /settings/ui
+}
+
+show_allowed() {
+    settings=$(allowed_json)
+    printf '%s' "$settings" \
+        | jq '{allowed_reactions: (.allowed_reactions // []), custom_emojis: (.custom_emojis // [])}'
+}
+
+validate_reaction() {
+    reaction=$1
+    settings=$(allowed_json)
+    if ! printf '%s' "$settings" \
+        | jq -e --arg reaction "$reaction" '(.allowed_reactions // []) | index($reaction) != null' >/dev/null
+    then
+        choices=$(printf '%s' "$settings" \
+            | jq -r '(.allowed_reactions // []) | join(", ")' 2>/dev/null \
+            || printf 'unknown')
+        fail "reaction '$reaction' is not allowed by this forge (allowed: $choices)"
+    fi
+}
+
+set_list_path() {
+    target=${1:-}
+    shift || true
+    case "$target" in
+        issue|pr|thread)
+            [ "$#" -eq 1 ] || fail "usage: forge-react list $target <owner>/<repo>#<number>"
+            set_thread_path "$1"
+            ;;
+        comment)
+            [ "$#" -eq 2 ] || fail "usage: forge-react list comment <owner>/<repo> <comment-id>"
+            set_comment_path "$1" "$2"
+            ;;
+        *)
+            fail "target must be issue, pr, thread, or comment"
+            ;;
+    esac
+}
+
+set_mutation_path_and_reaction() {
+    target=${1:-}
+    shift || true
+    case "$target" in
+        issue|pr|thread)
+            [ "$#" -eq 2 ] || fail "usage: forge-react add|remove $target <owner>/<repo>#<number> <reaction>"
+            set_thread_path "$1"
+            REACTION=$2
+            ;;
+        comment)
+            [ "$#" -eq 3 ] || fail "usage: forge-react add|remove comment <owner>/<repo> <comment-id> <reaction>"
+            set_comment_path "$1" "$2"
+            REACTION=$3
+            ;;
+        *)
+            fail "target must be issue, pr, thread, or comment"
+            ;;
+    esac
+}
+
+case "${1:-}" in
+    -h|--help|help)
+        usage
+        exit 0
+        ;;
+    allowed)
+        [ "$#" -eq 1 ] || fail "usage: forge-react allowed"
+        show_allowed
+        ;;
+    list)
+        shift
+        set_list_path "$@"
+        forge GET "$REACT_PATH"
+        ;;
+    add|remove)
+        command=$1
+        shift
+        set_mutation_path_and_reaction "$@"
+        validate_reaction "$REACTION"
+        payload=$(jq -cn --arg content "$REACTION" '{content: $content}')
+        method=POST
+        [ "$command" = "add" ] || method=DELETE
+        forge "$method" "$REACT_PATH" -d "$payload"
+        ;;
+    *)
+        usage >&2
+        exit 2
+        ;;
+esac

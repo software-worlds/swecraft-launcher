@@ -1,0 +1,1 @@
+{"schema":"sim-browser/bundle-v1","name":"alpha-bot","instructions":{"text":"# Goal\n\nMake `alpha` measurably faster without changing what it does.\n","redacted":0,"truncated":false},"memory":{"repo":"alpha","branch":"agent/memory","head":"4ed715f47c1b9a37b1ed7ef428a15a4fde0c7566"}}

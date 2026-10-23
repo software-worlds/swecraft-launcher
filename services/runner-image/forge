@@ -1,0 +1,122 @@
+#!/bin/sh
+# Minimal Forgejo API client for agent runs.
+#
+#   forge GET /repos/swecraft/demo/issues/7
+#   forge GET "/repos/swecraft/demo/pulls/3/reviews"
+#
+# Uses SWECRAFT_FORGE_URL (baked into the image) and the per-run token:
+# SWECRAFT_FORGE_TOKEN when set (direct-action runs, may write), otherwise
+# SWECRAFT_FORGE_READ_TOKEN (read-scoped; writes fail server-side).
+# See /usr/local/share/swecraft/forge-api.md for the endpoint cheat sheet.
+#
+# Writes are recorded on the same terms as the fj wrapper: the
+# invocation is written down and the runner decides on the host what action it
+# was. See fj-wrapper for why the split is there.
+
+set -eu
+
+if [ "$#" -lt 2 ]; then
+    echo "usage: forge METHOD /api-path [curl-args...]" >&2
+    exit 2
+fi
+
+method=$1
+path=$2
+shift 2
+
+token=${SWECRAFT_FORGE_TOKEN:-${SWECRAFT_FORGE_READ_TOKEN:-}}
+if [ -z "$token" ]; then
+    echo "forge: neither SWECRAFT_FORGE_TOKEN nor SWECRAFT_FORGE_READ_TOKEN is set" >&2
+    exit 2
+fi
+
+url="${SWECRAFT_FORGE_URL:-http://host.docker.internal:3400}/api/v1$path"
+calls=${SWECRAFT_FORGE_CALLS:-/app/.swecraft/forge-calls}
+max_bytes=${SWECRAFT_FORGE_CALL_MAX_BYTES:-8192}
+
+# A GET changes nothing, and reads are most of the traffic, so they keep the
+# original `exec` fast path untouched.
+case "$method" in
+    GET|HEAD|get|head)
+        exec curl --fail-with-body -sS -X "$method" \
+            -H "Authorization: token $token" \
+            -H "Content-Type: application/json" \
+            "$@" "$url" ;;
+esac
+
+out=$(mktemp) || exec curl --fail-with-body -sS -X "$method" \
+    -H "Authorization: token $token" -H "Content-Type: application/json" "$@" "$url"
+
+set +e
+curl --fail-with-body -sS -X "$method" \
+    -H "Authorization: token $token" \
+    -H "Content-Type: application/json" \
+    "$@" "$url" >"$out"
+rc=$?
+set -e
+
+cat "$out"
+
+# Bookkeeping only: never changes the caller's result. `argv` carries the
+# method and path first, then whatever curl arguments the agent supplied, so
+# the host sees the request as it was made. Those arguments may carry an
+# `Authorization` header the agent added itself; redaction happens at
+# collection, against the run's real secret list.
+record_call() (
+    command -v jq >/dev/null 2>&1 || return 0
+    mkdir -p "$calls" || return 0
+    # The X's must end the template; see fj-wrapper.
+    file=$(mktemp "$calls/call-XXXXXXXXXX") || return 0
+    ocap=$(mktemp) || return 0
+    head -c "$max_bytes" <"$out" >"$ocap" 2>/dev/null || true
+    # NUL-delimited; see fj-wrapper for why `--args` is not used.
+    argv=$(printf '%s\0' "$method" "$path" "$@" \
+        | jq -Rs 'split("\u0000")[:-1]') || return 0
+    # curl's `@file` data forms name a file the argument vector cannot carry;
+    # read it now so the request body is in the record. See
+    # fj-wrapper for why stdin (`@-`) is left alone.
+    body_file=
+    prev=
+    for arg in "$@"; do
+        case "$prev" in
+            -d|--data|--data-binary|--data-ascii|--json)
+                case "$arg" in @-) ;; @*) body_file=${arg#@} ;; esac ;;
+        esac
+        case "$arg" in
+            -d@-|--data=@-|--data-binary=@-) ;;
+            -d@*) body_file=${arg#-d@} ;;
+            --data=@*|--data-binary=@*|--data-ascii=@*|--json=@*) body_file=${arg#*=@} ;;
+        esac
+        prev=$arg
+    done
+    bcap=$(mktemp) || { rm -f "$ocap"; return 0; }
+    has_body=false
+    if [ -n "$body_file" ] && [ -f "$body_file" ] && [ -r "$body_file" ]; then
+        head -c "$max_bytes" <"$body_file" >"$bcap" 2>/dev/null && has_body=true
+    fi
+    jq -cn \
+        --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+        --arg cwd "$PWD" \
+        --arg actor "${SWECRAFT_AGENT:-}" \
+        --argjson exit "$rc" \
+        --argjson argv "$argv" \
+        --rawfile stdout "$ocap" \
+        --rawfile body "$bcap" \
+        --argjson has_body "$has_body" \
+        '{
+            ts: $ts,
+            tool: "forge",
+            cwd: $cwd,
+            actor: (if $actor == "" then null else $actor end),
+            exit: $exit,
+            argv: $argv,
+            stdout: $stdout,
+            stderr: "",
+            body: (if $has_body then $body else null end)
+        }' >"$file"
+    rm -f "$ocap" "$bcap"
+)
+record_call "$@" 2>/dev/null || true
+
+rm -f "$out" 2>/dev/null || true
+exit "$rc"

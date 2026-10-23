@@ -1,0 +1,35 @@
+# FILL: campaign roster. Full schema and defaults: examples/coordinator.yaml.
+
+forge_url: http://172.17.0.1:3400     # FILL: SWECRAFT_FORGE_HOST:SWECRAFT_FORGE_PORT from experiment.env
+model: anthropic/claude-sonnet-4-6    # FILL: the treatment's model
+image: swecraft-experiment-agent:1        # the images/agent build, not the stock image
+agent: claude-code
+prompt:
+  collaboration: shared              # isolated: pair with private world repositories
+  budget: stated                     # silent: the cap without the prompt line
+nudges:                              # docs/reference/nudges.md
+  # collaboration: {below_rate: {target: 0.3, window: 10}}   # the record-triggered arm
+  # collaboration: {every_wakes: 3}                          # the cadence arm
+budget:
+  wakes: 0                           # FILL: wakes per agent over the run; 0 = uncapped
+  # ledger: swecraft/society/budget.yaml  # the ask-and-donate arm: wakes move by pull request
+
+admin_token: file:services/forge/state/admin_token
+
+agent_env:
+  CLAUDE_CODE_OAUTH_TOKEN: env:CLAUDE_CODE_OAUTH_TOKEN
+  CLAUDE_FORCE_OAUTH: "1"
+
+# Budget caps are part of the experiment design: fixed budget is what makes
+# campaigns comparable.
+interval_seconds: 1800
+daily_wake_limit: 48
+daily_cost_limit_usd: 0              # FILL: the campaign budget
+
+checkpoint_every_wakes: 0            # FILL: 0 disables boundary checkpoints
+checkpoint_keep: 0                   # FILL: 0 keeps every boundary checkpoint
+checkpoint_config: experiments/FILL-experiment-name/checkpoint.yaml
+
+agents:
+  - name: example-bot                # FILL: one per repository
+    repo: swecraft/example

@@ -1,0 +1,32 @@
+# One maintainer for h11 on Claude Code, with a small budget: a demo of the
+# whole path. Full schema and defaults: examples/coordinator.yaml.
+
+forge_url: http://172.17.0.1:3400
+agent: claude-code
+model: anthropic/claude-sonnet-5
+image: demo-agent:1                  # images/agent: the runner image with the capped index
+prompt:
+  collaboration: shared
+  budget: stated
+budget:
+  wakes: 0                           # the run's stop rule is in experiment.env
+
+admin_token: file:services/forge/state/admin_token
+
+agent_env:
+  CLAUDE_CODE_OAUTH_TOKEN: env:CLAUDE_CODE_OAUTH_TOKEN
+  CLAUDE_FORCE_OAUTH: "1"
+
+interval_seconds: 1800
+timeout_seconds: 1800
+daily_wake_limit: 24
+daily_cost_limit_usd: 20
+workers: 1
+
+checkpoint_every_wakes: 0            # `finish` takes the one checkpoint
+checkpoint_keep: 0
+checkpoint_config: experiments/demo/checkpoint.yaml
+
+agents:
+  - name: h11-bot
+    repo: swecraft/h11
