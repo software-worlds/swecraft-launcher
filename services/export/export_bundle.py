@@ -67,6 +67,10 @@ from repo_code import count, repo_code
 
 INDEX_SCHEMA = "sim-browser/index-v1"
 BUNDLE_SCHEMA = "sim-browser/bundle-v1"
+# sim-browser's portraits (services/sim-browser/public/avatars), copied here: an agent the
+# world fixture names no portrait for gets one picked by a hash of its name from these, and the
+# browser draws it from its own copy. Without them every such agent would have none.
+AVATARS = Path(__file__).resolve().parent / "avatars"
 
 # Every text is kept whole. A session's steps come from its trajectory, which
 # holds every text whole. Only a session whose checkpoint holds no readable
@@ -1375,7 +1379,6 @@ def update_index(path: Path, core: dict[str, Any], entry: dict[str, Any], group:
 
 
 def main(argv: list[str] | None = None) -> int:
-    root = Path(__file__).resolve().parents[2]
     parser = argparse.ArgumentParser(description="Export one society checkpoint as a sim-browser bundle.")
     parser.add_argument("--evidence", required=True, help="the analyzer's directory: evidence.db and forge/")
     parser.add_argument("--checkpoint", required=True, help="the society checkpoint directory")
@@ -1385,7 +1388,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--out", required=True, help="the bundles directory, for example bundles")
     parser.add_argument("--group", help="the catalog group to list the run under (default: kept, else the world's id)")
     parser.add_argument("--setting", help="the run's setting, as the catalog states it")
-    parser.add_argument("--avatars", default=str(root / "public" / "avatars"), help="the portraits to assign from")
+    parser.add_argument("--avatars", default=str(AVATARS), help="the portraits to assign from (default: the copy beside this script)")
     parser.add_argument(
         "--known-secrets",
         help="a file the operator prepares, outside the checkpoint, with one secret value per line;"

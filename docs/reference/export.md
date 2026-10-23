@@ -31,10 +31,12 @@ uv run python services/export/export_bundle.py \
 `--world` is a layout: the world's repositories with their positions on the
 map's hex grid (`hex: [q, r]`), languages, dependency edges and held-out
 repositories. `swecraft-launch export` writes a plain one from `world.yaml` (the
-repositories on a spiral, no languages or edges) when none is given. The
-exporter replaces the run's files together and adds or updates the run's
-entry in `index.json`, and prints what it derived and the size of every file
-kind.
+repositories on a spiral, no languages or edges) when none is given. A layout
+may also name each agent's portrait (its `run` block); every other agent gets
+one of sim-browser's portraits, picked by a hash of its name from the copy in
+`services/export/avatars/` (`--avatars` names another folder). The exporter
+replaces the run's files together and adds or updates the run's entry in
+`index.json`, and prints what it derived and the size of every file kind.
 
 ## The evaluation page
 

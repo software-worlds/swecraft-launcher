@@ -9,7 +9,7 @@ from collections import Counter
 from pathlib import Path
 
 import synthetic
-from export_bundle import Export, call_kind, first_line, kimi_session_log, last_step_time, trajectory_steps
+from export_bundle import AVATARS, Export, call_kind, first_line, kimi_session_log, last_step_time, trajectory_steps
 from redact import Redactor
 
 FIXTURE = Path(__file__).resolve().parent / "fixtures"
@@ -677,6 +677,15 @@ class LedgerExportTest(unittest.TestCase):
         self.assertEqual(report["left out"], {"issue.comment by a user who is not an agent": 1, "forge_actions rows outside the world": 1})
         # Without portraits to pick from, an agent the world fixture names keeps its own; the others have none.
         self.assertEqual([a["avatar"] for a in core["agents"]], ["owl", None, None])
+
+
+class PortraitsTest(unittest.TestCase):
+    def test_the_browsers_portraits_ship_beside_the_exporter(self):
+        # The default for --avatars: without portraits to pick from, every agent the world
+        # fixture names none for would be drawn with its initials.
+        names = sorted(path.stem for path in AVATARS.glob("*.png"))
+        self.assertIn("owl", names)
+        self.assertGreater(len(names), 1)
 
 
 if __name__ == "__main__":
