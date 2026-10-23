@@ -679,6 +679,39 @@ class LedgerExportTest(unittest.TestCase):
         self.assertEqual([a["avatar"] for a in core["agents"]], ["owl", None, None])
 
 
+class BindingsFileTest(unittest.TestCase):
+    """A run from before the coordinator kept agent_repos, with one agent for every repository."""
+
+    def export(self, root, paths, bindings):
+        args = argparse.Namespace(
+            evidence=str(paths["evidence"]), checkpoint=str(paths["checkpoint"]), world=str(paths["world"]), id="one",
+            label="One agent", out=str(root / "bundles"), group=None, setting=None, avatars=str(root), known_secrets=None, bindings=bindings,
+        )
+        report = Export(args).run()
+        return report, json.loads((root / "bundles" / "one" / "core.json").read_text())
+
+    def test_the_file_binds_an_agent_the_naming_rule_cannot(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            root = Path(scratch)
+            paths = synthetic.build(root / "inputs")
+            db = sqlite3.connect(paths["evidence"] / "evidence.db")
+            # One agent was onboarded, on its own repository alpha, and booked every wake after.
+            db.execute("UPDATE wakes SET agent = 'society-bot' WHERE agent IS NOT NULL")
+            db.execute("DELETE FROM wakes WHERE agent IS NULL AND run_id != '20260801T090000Z-0000000a'")
+            db.commit()
+            db.close()
+            unbound, _ = self.export(root, paths, None)
+            (root / "bindings.json").write_text(json.dumps({"society-bot": ["alpha", "hub/beta", "gamma"]}))
+            report, core = self.export(root, paths, str(root / "bindings.json"))
+        # Without the file the naming rule binds alpha-bot, beta-bot and gamma-bot, and every booked session is left out.
+        self.assertEqual(unbound["agents from"], "the <repo>-bot naming rule")
+        self.assertEqual(unbound["left out"]["sessions of an agent the bindings do not name"], 4)
+        self.assertEqual(report["agents from"], "the bindings file")
+        self.assertNotIn("sessions of an agent the bindings do not name", report["left out"])
+        self.assertEqual(report["sessions"], 5)
+        self.assertEqual([(a["name"], a["repo"]) for a in core["agents"]], [("society-bot", "alpha")])
+
+
 class PortraitsTest(unittest.TestCase):
     def test_the_browsers_portraits_ship_beside_the_exporter(self):
         # The default for --avatars: without portraits to pick from, every agent the world

@@ -34,9 +34,20 @@ repositories. `swecraft-launch export` writes a plain one from `world.yaml` (the
 repositories on a spiral, no languages or edges) when none is given. A layout
 may also name each agent's portrait (its `run` block); every other agent gets
 one of sim-browser's portraits, picked by a hash of its name from the copy in
-`services/export/avatars/` (`--avatars` names another folder). The exporter
-replaces the run's files together and adds or updates the run's entry in
-`index.json`, and prints what it derived and the size of every file kind.
+`services/export/avatars/` (`--avatars` names another folder).
+
+Each session belongs to an agent, and each agent to the repositories it may
+write to, which the coordinator's ledger records (`agent_repos`). A checkpoint
+from before the ledger kept them is read with the roster's naming rule (the
+agent of repository `x` is `x-bot`); when its agents do not fit it, as in a run
+with one agent for every repository, `--bindings <file>` gives them: a JSON
+object of each agent's repositories, its own first, as the run's
+`coordinator.yaml` lists them. Sessions of an agent the bindings do not name are
+left out, and the export's report counts them.
+
+The exporter replaces the run's files together and adds or updates the run's
+entry in `index.json`, and prints what it derived and the size of every file
+kind.
 
 ## The evaluation page
 

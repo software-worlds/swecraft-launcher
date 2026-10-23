@@ -355,12 +355,15 @@ def last_step_time(output: Path) -> str | None:
     return latest
 
 
-def bindings(checkpoint: Path, society: list[str]) -> tuple[dict[str, list[str]], str]:
+def bindings(checkpoint: Path, society: list[str], given: dict[str, list[str]] | None = None) -> tuple[dict[str, list[str]], str]:
     """(agent → the repositories it may write to, its own first; where they came from).
 
-    The coordinator's `agent_repos` table when the checkpoint has one, else
-    the roster's naming rule: the agent of repository `x` is `x-bot`. Of an
-    agent's bound repositories, its own is the one its name is made from.
+    The coordinator's `agent_repos` table when the checkpoint has one; else
+    `given`, the operator's `--bindings` file, for a run from before the
+    coordinator kept that table whose agents the naming rule does not fit (one
+    agent for every repository); else the roster's naming rule: the agent of
+    repository `x` is `x-bot`. Of an agent's bound repositories, its own is the
+    one its name is made from, else the first the file names.
     """
 
     db_path = checkpoint / "state" / "coordinator" / "coordinator.db"
@@ -372,6 +375,10 @@ def bindings(checkpoint: Path, society: list[str]) -> tuple[dict[str, list[str]]
                 rows = [(str(r["agent"]), str(r["repo"]).rsplit("/", 1)[-1]) for r in db.execute("SELECT agent, repo FROM agent_repos")]
         finally:
             db.close()
+    source = "the coordinator's agent_repos table"
+    if not rows and given:
+        rows = [(agent, repo.rsplit("/", 1)[-1]) for agent, repos in given.items() for repo in repos]
+        source = "the bindings file"
     if not rows:
         return {f"{repo}-bot": [repo] for repo in society}, "the <repo>-bot naming rule"
     bound: dict[str, list[str]] = defaultdict(list)
@@ -382,7 +389,7 @@ def bindings(checkpoint: Path, society: list[str]) -> tuple[dict[str, list[str]]
         own = agent.removesuffix("-bot")
         if own in repos:
             repos.insert(0, repos.pop(repos.index(own)))
-    return dict(bound), "the coordinator's agent_repos table"
+    return dict(bound), source
 
 
 def world_of(fixture: dict[str, Any]) -> dict[str, Any]:
@@ -734,6 +741,17 @@ class Export:
         # kimi-cli sessions whose session log has another number of steps than the trajectory: their steps have no times.
         self.untimed: list[str] = []
 
+    def given_bindings(self) -> dict[str, list[str]] | None:
+        """The `--bindings` file: agent → the repositories it may write to, its own first."""
+
+        path = getattr(self.args, "bindings", None)
+        if not path:
+            return None
+        raw = json.loads(Path(path).read_text(encoding="utf-8"))
+        if not isinstance(raw, dict) or not all(isinstance(k, str) and isinstance(v, list) and all(isinstance(r, str) for r in v) for k, v in raw.items()):
+            raise SystemExit("--bindings must name a JSON object of agent names to lists of repository names")
+        return raw
+
     def operator_secrets(self) -> list[str]:
         """The values of `--known-secrets`, a file the operator prepares outside the checkpoint."""
 
@@ -820,7 +838,7 @@ class Export:
         }
 
         self.society = [repo for repo in society if self.forge.repository(f"{org}/{repo}") is not None]
-        self.bound, self.bound_from = bindings(self.checkpoint, self.society)
+        self.bound, self.bound_from = bindings(self.checkpoint, self.society, self.given_bindings())
         self.home = {agent: repos[0] for agent, repos in self.bound.items() if repos}
         wakes = [
             dict(row)
@@ -1389,6 +1407,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--group", help="the catalog group to list the run under (default: kept, else the world's id)")
     parser.add_argument("--setting", help="the run's setting, as the catalog states it")
     parser.add_argument("--avatars", default=str(AVATARS), help="the portraits to assign from (default: the copy beside this script)")
+    parser.add_argument(
+        "--bindings",
+        help="for a checkpoint whose coordinator ledger has no agent_repos table: a JSON file of each agent's"
+        " repositories, its own first (from the run's coordinator.yaml)",
+    )
     parser.add_argument(
         "--known-secrets",
         help="a file the operator prepares, outside the checkpoint, with one secret value per line;"
