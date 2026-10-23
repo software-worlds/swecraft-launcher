@@ -42,7 +42,9 @@ from pathlib import Path
 from typing import Any
 
 import evaluation_views as views
+import yaml
 from evaluation_views import ReadOnlyStateStore, _ClosingReadOnlyConnection
+from swecraft_coordinator.config import _TOP_KEYS as COORDINATOR_KEYS
 from swecraft_coordinator.config import CoordinatorConfig
 from swecraft_evaluator.report import (
     reading_from_record,
@@ -136,9 +138,21 @@ class LedgerReader(ReadOnlyStateStore):
 
 
 def coordinator_config(checkpoint: Path) -> CoordinatorConfig:
-    """The run's agents and repositories, with paths resolved into the checkpoint."""
+    """The run's agents and repositories, with paths resolved into the checkpoint.
 
-    config = CoordinatorConfig.load(checkpoint / COORDINATOR)
+    Some runs were configured with keys of a coordinator that this one does
+    not have (the open pull requests the paper's runs used: ``collaboration``,
+    and the budget pool's ``budget`` keys). Those keys set how the scheduler
+    behaved, not the agents and repositories read here, so they are left out
+    instead of refused as ``CoordinatorConfig.load`` refuses them; the budget,
+    which the views never read, is left out whole.
+    """
+
+    path = checkpoint / COORDINATOR
+    data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    if not isinstance(data, dict):
+        raise SystemExit(f"{path} is not a mapping")
+    config = CoordinatorConfig._build({key: value for key, value in data.items() if key in COORDINATOR_KEYS and key != "budget"})
     return replace(
         config,
         runs_dir=checkpoint / RUNS,
